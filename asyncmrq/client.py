@@ -3,11 +3,11 @@ import asyncio, struct
 from mrq.parser import Parser
 from mrq.errors import *
 
-__version__ = '0.7.0'
+__version__ = '0.7.1'
 __lang__ = 'python3'
 
 DEFAULT_PENDING_SIZE = 1024 * 1024
-DEFAULT_BUFFER_SIZE = 32 * 1024
+DEFAULT_BUFFER_SIZE = 128 * 1024
 DEFAULT_RECONNECT_TIME_WAIT = 2 # in seconds
 DEFAULT_MAX_RECONNECT_ATTEMPTS = 10
 DEFAULT_PING_INTERVAL = 120  # in seconds
@@ -52,7 +52,8 @@ class Client(object):
 
     self.max_data_size = DEFAULT_MAX_PAYLOAD_SIZE
 
-    self.pending = b''
+    self.pending = []
+    #self.pending = b''
     self.pending_sz = 0
 
     self.parser = Parser(self)
@@ -64,6 +65,7 @@ class Client(object):
 
   async def connect(self,
               servers=[("127.0.0.1",7000)],
+              ssl=None,
               io_loop=None,
               error_cb=None,
               disconnected_cb=None,
@@ -91,7 +93,7 @@ class Client(object):
       #try:
         for s in servers:
           srv = Server( s[0], s[1] )
-          srv.r, srv.w = await asyncio.open_connection( s[0], s[1], loop=self._loop, limit=DEFAULT_BUFFER_SIZE)
+          srv.r, srv.w = await asyncio.open_connection( s[0], s[1], loop=self._loop, limit=DEFAULT_BUFFER_SIZE, ssl=ssl)
           self.servers.append(srv)
 
         self.reading_task = self._loop.create_task(self.read_loop(0))
@@ -145,6 +147,12 @@ class Client(object):
             #if self._closed_cb is not None:
                 #yield from self._closed_cb()
 
+  async def flushcmd(self, slot, partition):
+    bstr = b'\x00\x0A' + struct.pack("=BB",slot,partition)
+    await self._send(bstr, 4)
+    if self.flush_queue.empty():
+      await self.flush_pending()
+
 
   async def push(self, slot, partition, data, data_len):
     """
@@ -155,16 +163,36 @@ class Client(object):
       raise ErrMaxPayload
     await self._push(slot, partition, data, data_len)
 
+
   async def _push(self, slot, partition, data, data_size):
     """
     Sends the push cmd
     """
-    bstr = b'\x00\x01' + bytes( (slot,partition) ) + struct.pack("I",data_size) + data
+    #print(b'\x00\x01' + bytes( (slot,partition) ) + struct.pack("I",data_size) + data)
+    bstr = b'\x00\x01' + struct.pack("=BBI",slot,partition,data_size) + data
+    #print(bstr)
+    #print(b'\x00\x01' + struct.pack("BBI",slot,partition,data_size))
     #self.stats['out_msgs'] += 1
     #self.stats['out_bytes'] += data_size
     await self._send(bstr, data_size + 8)
     if self.flush_queue.empty():
       await self.flush_pending()
+
+  async def get(self, b):
+    """
+    Gets
+    """
+    bstr = b'\x00\x0B' + struct.pack(">H",len(b)) + b
+    k = 0xB
+    if not k in self.read_queues.keys():
+      self.read_queues[k]  = asyncio.Queue( maxsize=1, loop=self._loop )
+
+    await self._send(bstr, len(b)+4)
+    if self.flush_queue.empty():
+      await self.flush_pending()
+
+    self.reads_in_flight.append(k)
+    return await self.read_queues[k].get()
 
   async def pull(self, slot, partition ):
     """
@@ -185,13 +213,24 @@ class Client(object):
     return await self.read_queues[k].get()
 #TODO To timeout use wait for item = yield from asyncio.wait_for(queue_obj.get(), 0.05)
 
+  async def bench(self):
+    """
+    Sends a bench cmd 
+    """
+    bstr = b'\x00\x09\x00\x00'
+    await self._send(bstr, 4)
+    if self.flush_queue.empty():
+      await self.flush_pending()
+
   async def _send(self, cmd, sz): #, priority=False):
         #if priority:
             #self._pending.insert(0, cmd)
         #else:
-    self.pending += cmd
+    self.pending.append(cmd)
+    #self.pending += cmd
     self.pending_sz += sz
     if self.pending_sz > DEFAULT_PENDING_SIZE:
+      #print("flush",self.pending_sz)
       await self.flush_pending()
 
   async def flush_pending(self):
@@ -213,8 +252,10 @@ class Client(object):
         await self.flush_queue.get()
 
         if self.pending_sz > 0:
-          self.servers[0].w.write(self.pending)
-          self.pending = b''
+          self.servers[0].w.writelines(self.pending)
+          #self.servers[0].w.write(self.pending)
+          self.pending = []
+          #self.pending = b''
           self.pending_sz = 0
           await self.servers[0].w.drain()
       except OSError as e:
@@ -249,7 +290,7 @@ class Client(object):
           break
 
         b = await self.servers[s].r.read(DEFAULT_BUFFER_SIZE)
-        await self.parser.parse(b)
+        self.parser.parse(b)
       except ErrProtocol:
         #self._process_op_err(ErrProtocol)
         break
