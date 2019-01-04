@@ -1,9 +1,9 @@
 from setuptools import setup
-from mrq.client import __version__
+import asyncmrq
 
 setup(
     name='asyncmrq',
-    version=__version__,
+    version=asyncmrq.__version__,
     description='MrQ client for Python Asyncio',
     long_description='Asyncio based Python client for MrQ, a ridiculously fast message queue',
     classifiers=[

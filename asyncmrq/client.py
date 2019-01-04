@@ -1,10 +1,7 @@
 
 import asyncio, struct
-from mrq.parser import Parser
-from mrq.errors import *
-
-__version__ = '0.7.1'
-__lang__ = 'python3'
+from .parser import Parser
+from .errors import *
 
 DEFAULT_PENDING_SIZE = 1024 * 1024
 DEFAULT_BUFFER_SIZE = 128 * 1024
