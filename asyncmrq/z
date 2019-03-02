@@ -1,0 +1,105 @@
+diff --git a/asyncmrq/client.py b/asyncmrq/client.py
+index 8f9fe6f..f92cbca 100644
+--- a/asyncmrq/client.py
++++ b/asyncmrq/client.py
+@@ -144,9 +144,10 @@ class Client(object):
+             #if self._closed_cb is not None:
+                 #yield from self._closed_cb()
+ 
+-  async def flushcmd(self, slot, partition):
++  async def send_flush(self, slot, partition):
+     bstr = b'\x00\x0A' + struct.pack("=BB",slot,partition)
+-    await self._send(bstr, 4)
++    self.pending.append(bstr)
++    self.pending_sz += 4
+     if self.flush_queue.empty():
+       await self.flush_pending()
+ 
+@@ -156,25 +157,27 @@ class Client(object):
+     Sends a PUSH to the slot / partition specified
+     """
+     #if self.is_closed: raise ErrConnectionClosed
+-    if data_len > self.max_data_size:
+-      raise ErrMaxPayload
+-    await self._push(slot, partition, data, data_len)
+-
++    #if data_len > self.max_data_size: raise ErrMaxPayload
++    #await self._push(slot, partition, data, data_len)
++    bstr = b'\x00\x01' + struct.pack("=BBI",slot,partition,data_len) + data
++    self.pending.append(bstr)
++    self.pending_sz += data_len + 8
++    if self.flush_queue.empty():
++      await self.flush_pending()
+ 
+-  async def _push(self, slot, partition, data, data_size):
++  async def push_noflush(self, slot, partition, data, data_len):
+     """
+-    Sends the push cmd
++    Sends a PUSH to the slot / partition specified
+     """
+-    #print(b'\x00\x01' + bytes( (slot,partition) ) + struct.pack("I",data_size) + data)
+-    bstr = b'\x00\x01' + struct.pack("=BBI",slot,partition,data_size) + data
+-    #print(bstr)
+-    #print(b'\x00\x01' + struct.pack("BBI",slot,partition,data_size))
+-    #self.stats['out_msgs'] += 1
+-    #self.stats['out_bytes'] += data_size
+-    await self._send(bstr, data_size + 8)
+-    if self.flush_queue.empty():
++    #if self.is_closed: raise ErrConnectionClosed
++    #if data_len > self.max_data_size: raise ErrMaxPayload
++    bstr = b'\x00\x01' + struct.pack("=BBI",slot,partition,data_len) + data
++    self.pending.append(bstr)
++    self.pending_sz += data_len + 8
++    if self.pending_sz > DEFAULT_PENDING_SIZE:
+       await self.flush_pending()
+ 
++
+   async def get(self, b):
+     """
+     Gets
+@@ -184,7 +187,8 @@ class Client(object):
+     if not k in self.read_queues.keys():
+       self.read_queues[k]  = asyncio.Queue( maxsize=1, loop=self._loop )
+ 
+-    await self._send(bstr, len(b)+4)
++    self.pending.append(bstr)
++    self.pending_sz += sz
+     if self.flush_queue.empty():
+       await self.flush_pending()
+ 
+@@ -197,12 +201,11 @@ class Client(object):
+     """
+     k = (slot,partition) 
+     bstr = b'\x00\x02' + bytes(k)
+-    #self.stats['out_msgs'] += 1
+-    #self.stats['out_bytes'] += data_size
+     if not k in self.read_queues.keys():
+       self.read_queues[k]  = asyncio.Queue( maxsize=1, loop=self._loop )
+ 
+-    await self._send(bstr, 4)
++    self.pending.append(cmd)
++    self.pending_sz += sz
+     if self.flush_queue.empty():
+       await self.flush_pending()
+ 
+@@ -215,19 +218,9 @@ class Client(object):
+     Sends a bench cmd 
+     """
+     bstr = b'\x00\x09\x00\x00'
+-    await self._send(bstr, 4)
+-    if self.flush_queue.empty():
+-      await self.flush_pending()
+-
+-  async def _send(self, cmd, sz): #, priority=False):
+-        #if priority:
+-            #self._pending.insert(0, cmd)
+-        #else:
+     self.pending.append(cmd)
+-    #self.pending += cmd
+     self.pending_sz += sz
+-    if self.pending_sz > DEFAULT_PENDING_SIZE:
+-      #print("flush",self.pending_sz)
++    if self.flush_queue.empty():
+       await self.flush_pending()
+ 
+   async def flush_pending(self):

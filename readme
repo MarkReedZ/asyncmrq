@@ -1,0 +1,7 @@
+
+Need examples
+
+copy client to PartitionClient
+  add queue_size_per_server_in_mb
+
+Add a round robin client

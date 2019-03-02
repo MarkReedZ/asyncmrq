@@ -7,33 +7,27 @@ class Parser(object):
     self.bl = 0
     self.msglen = 0
 
-  def parse(self, data=b''):
-    """
-    Parses the response from the MrQ server
-    """
+  async def parse(self, s, data=b''):
     self.buf += data
-    if self.bl == 0:
-      self.msglen = int.from_bytes(data[1:4], byteorder='little')
-    self.bl += len(data)
 
-    if self.bl < self.msglen+5: return
+    while 1:
+      if len(self.buf) < 5: return
+      self.msglen = int.from_bytes(self.buf[1:4], byteorder='little')
+      if len(self.buf) < self.msglen+5: return
 
-    #b'\x01\x08\x00\x00\x00\x04\x00\x00\x00test'
-    #print( data[0] )
-    #print( int.from_bytes(data[1:4], byteorder='little') )
-    #print( int.from_bytes(data[5:8], byteorder='little') )
-
-    if self.buf[0] == 0x1:
-      i = 5
-      msgs = []
-      while (i < self.msglen):
-        ml = int.from_bytes(self.buf[i:i+3], byteorder='little')
-        i+=4
-        msgs.append( self.buf[i:i+ml] )
-        i += ml
-      self.c.process_read(msgs)
-    if self.buf[0] == 0x2:
-      self.c.process_read( self.buf[5:5+self.msglen] )
+      if self.buf[0] == 0x1:
+        i = 5
+        msgs = []
+        while (i < self.msglen):
+          ml = int.from_bytes(self.buf[i:i+3], byteorder='little')
+          i+=4
+          msgs.append( self.buf[i:i+ml] )
+          i += ml
+        await self.c.process_read(s, msgs)
+        self.buf = self.buf[i:]
+      if self.buf[0] == 0x2:
+        await self.c.process_read( s, self.buf[5:5+self.msglen] )
+        self.buf = self.buf[5+self.msglen:]
        
       
       
